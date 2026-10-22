@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Replace with the admin's email (the same one you create in Firebase Authentication)
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email == 'nicholasmaccheyne@gmail.com';
+    }
+
+    match /pickupDates/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /orders/{id} {
+      allow create: if request.resource.data.keys().hasOnly(['name','email','pickupId','pickupDate','location','loaves','createdAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() <= 100
+        && request.resource.data.email is string && request.resource.data.email.size() <= 200
+        && request.resource.data.loaves is int && request.resource.data.loaves >= 1 && request.resource.data.loaves <= 12
+        && request.resource.data.createdAt == request.time;
+      allow read, update, delete: if isAdmin();
+    }
+
+    // Used only by the Trigger Email extension (server side)
+    match /mail/{id} {
+      allow read, write: if false;
+    }
+  }
+}

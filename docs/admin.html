@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>StardewAcres admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,800&family=Work+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f6f7f2;--ink:#202a23;--green:#2f5d46;--crust:#8a5522;--line:#d5dacd}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Work Sans",system-ui,sans-serif}
+main{max-width:56rem;margin:0 auto;padding:2rem 1.25rem 4rem}
+h1,h2{font-family:Fraunces,Georgia,serif;color:var(--green);margin:0 0 .75rem}
+h1{font-weight:800;font-size:2.2rem}h2{font-size:1.4rem;margin-top:2.5rem}
+.row{display:flex;flex-wrap:wrap;gap:.6rem;align-items:end;margin-bottom:1rem}
+label{display:grid;gap:.25rem;font-weight:600;font-size:.9rem}
+input{font:inherit;padding:.55rem .65rem;border:1.5px solid var(--line);border-radius:4px;background:#fff}
+button{font:600 .95rem "Work Sans",sans-serif;padding:.6rem 1rem;border:0;border-radius:4px;background:var(--crust);color:#fff;cursor:pointer}
+button.quiet{background:none;color:var(--crust);padding:.2rem .4rem;text-decoration:underline}
+:focus-visible{outline:3px solid var(--crust);outline-offset:2px}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;background:#fff;border:1.5px solid var(--line)}
+th,td{text-align:left;padding:.55rem .7rem;border-bottom:1px solid var(--line)}
+th{background:#eaeee4}
+.tally{display:grid;grid-template-columns:repeat(auto-fill,minmax(14rem,1fr));gap:.75rem}
+.t{background:#fff;border:2px solid var(--green);border-radius:6px;padding:.9rem}
+.t b{display:block;font:800 2.4rem/1 Fraunces,Georgia,serif;color:var(--crust)}
+.err{color:#a33a26;min-height:1.4em}
+.hide{display:none}
+</style>
+</head>
+<body>
+<main>
+  <h1>StardewAcres admin</h1>
+
+  <form id="login" class="row">
+    <label>Email <input id="em" type="email" required autocomplete="username"></label>
+    <label>Password <input id="pw" type="password" required autocomplete="current-password"></label>
+    <button>Sign in</button>
+  </form>
+  <p class="err" id="err"></p>
+
+  <div id="app" class="hide">
+    <p><button class="quiet" id="out">Sign out</button></p>
+
+    <h2>Pickup dates</h2>
+    <form id="addDate" class="row">
+      <label>Date <input id="d" type="date" required></label>
+      <label>Location <input id="loc" value="Walmart Parking Lot" required maxlength="120"></label>
+      <button>Add pickup date</button>
+    </form>
+    <div class="scroll"><table><thead><tr><th>Date</th><th>Location</th><th></th></tr></thead><tbody id="dates"></tbody></table></div>
+
+    <h2>Loaves ordered</h2>
+    <div class="tally" id="tally"></div>
+
+    <h2>All orders</h2>
+    <div class="scroll"><table><thead><tr><th>Placed</th><th>Name</th><th>Email</th><th>Pickup</th><th>Loaves</th><th></th></tr></thead><tbody id="orders"></tbody></table></div>
+  </div>
+</main>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+const firebaseConfig = {apiKey:"AIzaSyBEjPtKbWxUWdp1PtOWaLN3noMDLUXmyZ4",authDomain:"stardewacres.firebaseapp.com",projectId:"stardewacres",storageBucket:"stardewacres.firebasestorage.app",messagingSenderId:"573287846915",appId:"1:573287846915:web:465da6aefe4ca767b82a36",measurementId:"G-WB32BQRM51"};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth(), db = firebase.firestore();
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pretty = d => new Date(d + "T12:00:00").toLocaleDateString(undefined, {weekday:"short", month:"short", day:"numeric", year:"numeric"});
+let unsubs = [];
+
+$("login").addEventListener("submit", e => {
+  e.preventDefault(); $("err").textContent = "";
+  auth.signInWithEmailAndPassword($("em").value, $("pw").value).catch(() => $("err").textContent = "Sign-in failed. Check your email and password.");
+});
+$("out").onclick = () => auth.signOut();
+
+auth.onAuthStateChanged(user => {
+  unsubs.forEach(u => u()); unsubs = [];
+  $("app").classList.toggle("hide", !user);
+  $("login").classList.toggle("hide", !!user);
+  if (!user) return;
+
+  unsubs.push(db.collection("pickupDates").orderBy("date").onSnapshot(s => {
+    $("dates").innerHTML = s.empty ? "<tr><td colspan=3>No pickup dates yet. Add one above.</td></tr>" :
+      s.docs.map(x => { const d = x.data(); return `<tr><td>${pretty(d.date)}</td><td>${esc(d.location)}</td><td><button class="quiet" data-del-date="${x.id}">Remove</button></td></tr>`; }).join("");
+  }, e => $("err").textContent = "Couldn’t load dates: " + e.message));
+
+  unsubs.push(db.collection("orders").orderBy("createdAt", "desc").onSnapshot(s => {
+    const groups = {};
+    s.forEach(x => { const o = x.data(); const k = o.pickupDate + "|" + o.location; (groups[k] = groups[k] || {date:o.pickupDate, location:o.location, loaves:0, count:0}); groups[k].loaves += o.loaves; groups[k].count++; });
+    const g = Object.values(groups).sort((a, b) => a.date.localeCompare(b.date));
+    $("tally").innerHTML = g.length ? g.map(t => `<div class="t"><b>${t.loaves}</b>${t.loaves === 1 ? "loaf" : "loaves"} · ${t.count} order${t.count === 1 ? "" : "s"}<br>${pretty(t.date)}<br>${esc(t.location)}</div>`).join("") : "<p>No orders yet.</p>";
+    $("orders").innerHTML = s.empty ? "<tr><td colspan=6>No orders yet.</td></tr>" : s.docs.map(x => {
+      const o = x.data(), t = o.createdAt ? o.createdAt.toDate().toLocaleString() : "";
+      return `<tr><td>${t}</td><td>${esc(o.name)}</td><td>${esc(o.email)}</td><td>${pretty(o.pickupDate)}<br>${esc(o.location)}</td><td>${o.loaves}</td><td><button class="quiet" data-del-order="${x.id}">Delete</button></td></tr>`;
+    }).join("");
+  }, e => $("err").textContent = "Couldn’t load orders: " + e.message));
+});
+
+$("addDate").addEventListener("submit", async e => {
+  e.preventDefault();
+  try { await db.collection("pickupDates").add({date: $("d").value, location: $("loc").value.trim()}); $("d").value = ""; }
+  catch (err) { $("err").textContent = "Couldn’t add the date: " + err.message; }
+});
+
+document.addEventListener("click", e => {
+  const d = e.target.dataset;
+  if (d.delDate && confirm("Remove this pickup date?")) db.collection("pickupDates").doc(d.delDate).delete();
+  if (d.delOrder && confirm("Delete this order?")) db.collection("orders").doc(d.delOrder).delete();
+});
+</script>
+</body>
+</html>
